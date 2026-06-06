@@ -107,6 +107,7 @@ const create = async (data) => {
     data: {
       id: randomUUID(),
       ...data,
+      source: data.source || 'System',
       preferredDate: data.preferredDate ? new Date(data.preferredDate) : null,
       status: 'NEW'
     }
@@ -283,6 +284,103 @@ const convertToJob = async (id, payload = {}) => {
   return conversionResult.job;
 };
 
+/**
+ * Convert Lead to Estimate
+ * 1. Find/Create Customer
+ * 2. Create Estimate
+ * 3. Update Lead Status
+ */
+const convertToEstimate = async (id, payload = {}) => {
+  await ensureLeadColumns();
+  const lead = await prisma.lead.findUnique({ where: { id } });
+  if (!lead) throw new Error('Lead not found');
+  if (lead.status === 'CONVERTED' || lead.status === 'ESTIMATE_CREATED') throw new Error('Lead already converted');
+
+  const conversionResult = await prisma.$transaction(async (tx) => {
+    // 1. Find or Create Customer
+    let customer = await tx.customer.findFirst({
+      where: {
+        OR: [
+          { email: lead.email },
+          { phone: lead.phone }
+        ]
+      }
+    });
+
+    if (!customer) {
+      customer = await tx.customer.create({
+        data: {
+          name: `${lead.firstName} ${lead.lastName}`,
+          email: lead.email,
+          phone: lead.phone,
+          address: lead.address,
+        }
+      });
+    }
+
+    const portalUserResult = await ensureCustomerPortalUser(tx, customer, lead);
+    customer = portalUserResult.customer;
+
+    // 2. Create Estimate from saved lead pricing (if any)
+    const payloadPricing = buildPricingSnapshot(payload?.items || []);
+    const leadPricing = payloadPricing.items.length > 0 ? payloadPricing : (lead.pricingData || null);
+    let createdEstimate = null;
+
+    if (leadPricing?.items?.length) {
+      createdEstimate = await tx.estimate.create({
+        data: {
+          customerId: customer.id,
+          projectTitle: `${lead.serviceType} for ${lead.firstName} ${lead.lastName}`,
+          notes: lead.jobDescription,
+          status: 'PENDING',
+          totalAmount: Number(leadPricing.total || 0),
+          items: {
+            create: leadPricing.items.map((item) => ({
+              description: item.description,
+              quantity: Number(item.quantity),
+              unitPrice: Number(item.unitPrice),
+              total: Number(item.total)
+            }))
+          }
+        }
+      });
+    } else {
+      // Create empty estimate if no pricing items are provided
+      createdEstimate = await tx.estimate.create({
+        data: {
+          customerId: customer.id,
+          projectTitle: `${lead.serviceType} for ${lead.firstName} ${lead.lastName}`,
+          notes: lead.jobDescription,
+          status: 'PENDING',
+          totalAmount: 0
+        }
+      });
+    }
+
+    // 3. Update Lead
+    await tx.lead.update({
+      where: { id },
+      data: { status: 'ESTIMATE_CREATED' }
+    });
+
+    return {
+      estimate: createdEstimate,
+      portalUserResult
+    };
+  });
+
+  if (conversionResult?.portalUserResult?.isNewUserCreated && lead.email && conversionResult.portalUserResult.temporaryPassword) {
+    sendPortalCredentialsEmail({
+      email: lead.email.trim().toLowerCase(),
+      temporaryPassword: conversionResult.portalUserResult.temporaryPassword
+    }).catch((error) => {
+      console.error('Failed to send portal credentials email', error);
+    });
+  }
+
+  return conversionResult.estimate;
+};
+
 const exportLeads = async () => {
   await ensureLeadColumns();
   const leads = await prisma.lead.findMany({
@@ -302,6 +400,93 @@ const exportLeads = async () => {
   return [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
 };
 
+const updateSchedule = async (id, data, user) => {
+  await ensureLeadColumns();
+  const lead = await prisma.lead.findUnique({ where: { id } });
+  if (!lead) throw new Error('Lead not found');
+
+  let history = [];
+  try {
+    history = Array.isArray(lead.historyLog) ? lead.historyLog : (JSON.parse(lead.historyLog) || []);
+  } catch(e) {}
+  
+  history.push({
+    action: 'Schedule Updated by Admin',
+    date: new Date().toISOString(),
+    details: `Admin proposed ${data.proposedDate} at ${data.proposedTimeSlot}`,
+    note: data.internalNote
+  });
+
+  return await prisma.lead.update({
+    where: { id },
+    data: {
+      proposedDate: data.proposedDate ? new Date(data.proposedDate) : null,
+      proposedTimeSlot: data.proposedTimeSlot,
+      internalNote: data.internalNote,
+      status: 'SCHEDULE_PENDING',
+      historyLog: history
+    }
+  });
+};
+
+const customerResponse = async (id, data) => {
+  await ensureLeadColumns();
+  const lead = await prisma.lead.findUnique({ where: { id } });
+  if (!lead) throw new Error('Lead not found');
+
+  let status = 'SCHEDULE_PENDING';
+  let actionText = '';
+  if (data.action === 'ACCEPT') {
+    status = 'SCHEDULE_CONFIRMED';
+    actionText = 'Customer accepted schedule';
+  } else if (data.action === 'REJECT') {
+    status = 'SCHEDULE_REJECTED';
+    actionText = 'Customer rejected schedule';
+  } else if (data.action === 'REQUEST_RESCHEDULE') {
+    status = 'RESCHEDULE_REQUESTED';
+    actionText = 'Customer requested reschedule';
+  }
+
+  let history = [];
+  try {
+    history = Array.isArray(lead.historyLog) ? lead.historyLog : (JSON.parse(lead.historyLog) || []);
+  } catch(e) {}
+
+  history.push({
+    action: actionText,
+    date: new Date().toISOString(),
+    details: data.message || 'No additional notes provided by customer.'
+  });
+
+  const updatedLead = await prisma.lead.update({
+    where: { id },
+    data: {
+      status,
+      customerMessage: data.message,
+      historyLog: history
+    }
+  });
+
+  try {
+    const admins = await prisma.user.findMany({
+      where: { role: { in: ['ADMIN', 'MANAGER'] } }
+    });
+    const notificationsService = require('../notifications/notifications.service');
+    for (const admin of admins) {
+      notificationsService.createNotification(admin.id, {
+        type: 'LEAD_UPDATE',
+        title: 'Customer Schedule Response',
+        message: `${lead.firstName} ${actionText.toLowerCase()}`,
+        link: '/leads'
+      });
+    }
+  } catch (err) {
+    console.error('Notification error:', err);
+  }
+
+  return updatedLead;
+};
+
 module.exports = {
   create,
   getAll,
@@ -310,5 +495,8 @@ module.exports = {
   proposeSchedule,
   updatePricing,
   convertToJob,
-  exportLeads
+  convertToEstimate,
+  exportLeads,
+  updateSchedule,
+  customerResponse
 };

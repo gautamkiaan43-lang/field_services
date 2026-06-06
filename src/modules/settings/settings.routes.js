@@ -31,6 +31,8 @@ const imageOnlyUpload = multer({
   }
 });
 
+router.get('/public-booking', settingsController.getPublicBooking);
+
 router.get('/', authenticate, settingsController.getSettings);
 router.put('/', authenticate, settingsController.updateSettings);
 router.get('/business', authenticate, settingsController.getBusinessSettings);

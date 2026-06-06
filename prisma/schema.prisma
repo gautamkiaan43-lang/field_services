@@ -270,7 +270,7 @@ model Payment {
   type      String   // LABOR, MATERIAL, etc.
   createdAt DateTime @default(now())
 
-  invoice   Invoice  @relation(fields: [invoiceId], references: [id], map: "payment_invoiceId_fkey")
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], map: "Payment_invoiceId_fkey")
   @@map("payment")
 }
 
@@ -468,6 +468,11 @@ enum LeadStatus {
   SCHEDULED
   REJECTED
   CONVERTED
+  ESTIMATE_CREATED
+  SCHEDULE_PENDING
+  SCHEDULE_CONFIRMED
+  SCHEDULE_REJECTED
+  RESCHEDULE_REQUESTED
   @@map("lead_status")
 }
 
@@ -507,6 +512,7 @@ model Lead {
   preferredDate     DateTime?
   preferredTimeSlot String?
   status            LeadStatus @default(NEW)
+  source            String     @default("System")
   
   // Schedule Proposal
   proposedDate      DateTime?
@@ -514,6 +520,7 @@ model Lead {
   internalNote      String?    @db.Text
   customerMessage   String?    @db.Text
   pricingData       Json?
+  historyLog        Json?      @default("[]")
   
   createdAt         DateTime   @default(now())
   updatedAt         DateTime @updatedAt
@@ -557,6 +564,9 @@ model Settings {
   businessContactEmail String?
   businessAddress   String? @db.Text
 
+  // Booking Configuration
+  bookingConfig     Json?
+
   updatedAt         DateTime @updatedAt
   
   @@map("settings")
@@ -593,4 +603,16 @@ model Review {
   @@index([customerId])
   @@index([jobId])
   @@map("review")
+}
+
+model PublicFormLink {
+  id        String    @id @default(cuid())
+  token     String    @unique @default(uuid())
+  name      String?   @default("Default Link")
+  isActive  Boolean   @default(true)
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@map("public_form_link")
 }

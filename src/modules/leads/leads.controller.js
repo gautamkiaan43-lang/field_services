@@ -1,11 +1,25 @@
 const leadService = require('./leads.service');
 
+const prisma = require('../../config/db');
+
 /**
  * Public Lead Create
  */
 const createLead = async (req, res) => {
   try {
-    const lead = await leadService.create(req.body);
+    const { token, ...leadData } = req.body;
+    
+    // Validate token
+    if (!token) {
+      return res.status(400).json({ success: false, error: 'Form token is required' });
+    }
+    
+    const link = await prisma.publicFormLink.findUnique({ where: { token } });
+    if (!link || !link.isActive || (link.expiresAt && new Date() > new Date(link.expiresAt))) {
+      return res.status(400).json({ success: false, error: 'Invalid or expired form link' });
+    }
+
+    const lead = await leadService.create(leadData);
     res.status(201).json({ success: true, data: lead });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
@@ -70,6 +84,15 @@ const convertToJob = async (req, res) => {
   }
 };
 
+const convertToEstimate = async (req, res) => {
+  try {
+    const estimate = await leadService.convertToEstimate(req.params.id, req.body);
+    res.json({ success: true, data: estimate });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+};
+
 const exportLeads = async (req, res) => {
   try {
     const csv = await leadService.exportLeads();
@@ -81,6 +104,24 @@ const exportLeads = async (req, res) => {
   }
 };
 
+const updateSchedule = async (req, res) => {
+  try {
+    const lead = await leadService.updateSchedule(req.params.id, req.body, req.user);
+    res.json({ success: true, data: lead });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+};
+
+const customerResponse = async (req, res) => {
+  try {
+    const lead = await leadService.customerResponse(req.params.id, req.body);
+    res.json({ success: true, data: lead });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+};
+
 module.exports = {
   createLead,
   getAllLeads,
@@ -89,5 +130,8 @@ module.exports = {
   proposeSchedule,
   updateLeadPricing,
   convertToJob,
-  exportLeads
+  convertToEstimate,
+  exportLeads,
+  updateSchedule,
+  customerResponse
 };

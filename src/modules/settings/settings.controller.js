@@ -89,3 +89,16 @@ exports.uploadBusinessLogo = async (req, res) => {
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
+
+exports.getPublicBooking = async (req, res) => {
+  try {
+    const bookingConfig = await settingsService.getPublicBookingSettings();
+    res.json({
+      success: true,
+      data: bookingConfig
+    });
+  } catch (error) {
+    console.error('Failed to fetch public booking settings:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};

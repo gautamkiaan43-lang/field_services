@@ -27,6 +27,7 @@ const leadRoutes = require('./modules/leads/leads.routes');
 const settingsRoutes = require('./modules/settings/settings.routes');
 const notificationsRoutes = require('./modules/notifications/notifications.routes');
 const searchRoutes = require('./modules/search/search.routes');
+const publicLinksRoutes = require('./modules/publicLinks/publicLinks.routes');
 
 router.use('/auth', authRoutes);
 router.use('/customers', customerRoutes);
@@ -52,5 +53,6 @@ router.use('/settings', settingsRoutes);
 router.use('/notifications', notificationsRoutes);
 router.use('/reviews', reviewsRoutes);
 router.use('/search', searchRoutes);
+router.use('/public-links', publicLinksRoutes);
 
 module.exports = router;
