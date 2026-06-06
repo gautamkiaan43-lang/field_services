@@ -52,7 +52,7 @@ const buildPricingSnapshot = (items = []) => {
 };
 
 const generateTemporaryPassword = () => {
-  return `FS-${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+  return 'password123';
 };
 
 const ensureCustomerPortalUser = async (tx, customer, lead) => {
